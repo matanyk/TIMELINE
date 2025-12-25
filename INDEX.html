@@ -1,0 +1,1098 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>אתגר ציר הזמן ההיסטורי</title>
+    <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useRef, useEffect } = React;
+
+        const AlertCircle = ({ className }) => (
+            <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10" strokeWidth="2"/>
+                <line x1="12" y1="8" x2="12" y2="12" strokeWidth="2"/>
+                <line x1="12" y1="16" x2="12.01" y2="16" strokeWidth="2"/>
+            </svg>
+        );
+
+        const CheckCircle = ({ className }) => (
+            <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10" strokeWidth="2"/>
+                <path d="M9 12l2 2 4-4" strokeWidth="2"/>
+            </svg>
+        );
+
+        const Trophy = ({ className }) => (
+            <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6M18 9h1.5a2.5 2.5 0 0 0 0-5H18M4 22h16M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22" strokeWidth="2"/>
+                <path d="M18 2H6v7a6 6 0 0 0 12 0V2z" strokeWidth="2"/>
+            </svg>
+        );
+
+        const SHEETS_CONFIG = {
+            combined: {
+                id: '1m_TJjUYpNZkfU9aoBn1VC_YGZMFdKWDNzLKLiu1gHcc',
+                name: 'משולב'
+            },
+            general: {
+                id: '1gxmy8XmERvSKPW0rmPXfxCfb-mXJupJVCUw3fbq56Xw',
+                name: 'כללי'
+            },
+            jewish: {
+                id: '1UeZhLntP_Ot_TxvJp54LqiwltA3jhyhkXFxcIo9fs_g',
+                name: 'יהודי דתי'
+            }
+        };
+
+        async function loadGoogleSheetData(sheetId) {
+            try {
+                // Use alternative URL that works with CORS
+                const url = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
+                const response = await fetch(url, {
+                    mode: 'cors',
+                    credentials: 'omit'
+                });
+                
+                if (!response.ok) {
+                    console.error('Response not OK:', response.status, response.statusText);
+                    return null;
+                }
+                
+                const text = await response.text();
+                console.log('Successfully loaded CSV, length:', text.length);
+                
+                const rows = text.split('\n').slice(1);
+                const figures = [];
+                
+                rows.forEach((row, idx) => {
+                    if (!row.trim()) return;
+                    
+                    const parts = row.split(',');
+                    if (parts.length >= 3) {
+                        const name = parts[0].replace(/^"|"$/g, '').trim();
+                        const year = parseInt(parts[1].replace(/^"|"$/g, '').trim());
+                        const link = parts.slice(2).join(',').replace(/^"|"$/g, '').trim();
+                        
+                        if (name && !isNaN(year) && link) {
+                            figures.push({ name, year, link });
+                        }
+                    }
+                });
+                
+                console.log('Parsed figures:', figures.length);
+                return figures;
+            } catch (error) {
+                console.error('Error loading Google Sheet:', error);
+                return null;
+            }
+        }
+
+        function TimelineGame() {
+            const [placed, setPlaced] = useState([]);
+            const [currentFigure, setCurrentFigure] = useState(null);
+            const [remaining, setRemaining] = useState([]);
+            const [draggedItem, setDraggedItem] = useState(null);
+            const [message, setMessage] = useState(null);
+            const [steps, setSteps] = useState(0);
+            const [successCount, setSuccessCount] = useState(0);
+            const [gameComplete, setGameComplete] = useState(false);
+            const [gameFigures, setGameFigures] = useState([]);
+            const [limitAttempts, setLimitAttempts] = useState(false);
+            const [attemptCount, setAttemptCount] = useState(0);
+            const [failedFigures, setFailedFigures] = useState([]);
+            const [selectedNumber, setSelectedNumber] = useState('');
+            const [placementType, setPlacementType] = useState('after');
+            const [dragPosition, setDragPosition] = useState(null);
+            const [figureCount, setFigureCount] = useState(10);
+            const [allowSplit, setAllowSplit] = useState(true);
+            const [dataSource, setDataSource] = useState('combined');
+            const [isLoading, setIsLoading] = useState(true);
+            const [allFigures, setAllFigures] = useState([]);
+            const [fontSizeAdjustment, setFontSizeAdjustment] = useState(0);
+            const [forceUpdate, setForceUpdate] = useState(0);
+            const timelineRef = useRef(null);
+            const timeline1Ref = useRef(null);
+            const timeline2Ref = useRef(null);
+
+            // Force re-render when fontSizeAdjustment changes
+            useEffect(() => {
+                console.log('fontSizeAdjustment changed to:', fontSizeAdjustment);
+                setForceUpdate(prev => prev + 1);
+            }, [fontSizeAdjustment]);
+
+            const sortFigures = (figures) => {
+                return [...figures].sort((a, b) => {
+                    if (a.year !== b.year) return a.year - b.year;
+                    return a.name.localeCompare(b.name, 'he');
+                });
+            };
+
+            const initializeGame = (figures) => {
+                const shuffled = [...figures].sort(() => Math.random() - 0.5);
+                const selected = shuffled.slice(0, Math.min(figureCount, figures.length));
+                const sorted = sortFigures(selected);
+                setGameFigures(sorted);
+                
+                const gameShuffled = [...sorted].sort(() => Math.random() - 0.5);
+                const initial = gameShuffled[0];
+                setPlaced([initial]);
+                setRemaining(gameShuffled.slice(1));
+                setCurrentFigure(gameShuffled[1]);
+                setSuccessCount(1);
+                setSteps(0);
+                setFailedFigures([]);
+                setGameComplete(false);
+            };
+
+            useEffect(() => {
+                const loadInitialData = async () => {
+                    setIsLoading(true);
+                    const sheetId = SHEETS_CONFIG.combined.id;
+                    const figures = await loadGoogleSheetData(sheetId);
+                    
+                    if (figures && figures.length >= 10) {
+                        setAllFigures(figures);
+                        setMessage({ type: 'success', text: `נטענו ${figures.length} דמויות` });
+                        setTimeout(() => setMessage(null), 2000);
+                    } else {
+                        setMessage({ type: 'error', text: 'שגיאה בטעינת הנתונים. אנא בדוק את הקישור והרשאות השיתוף' });
+                    }
+                    
+                    setIsLoading(false);
+                };
+                
+                loadInitialData();
+            }, []);
+
+            useEffect(() => {
+                if (allFigures.length > 0) {
+                    initializeGame(allFigures);
+                }
+            }, [figureCount, allFigures]);
+
+            const handleLoadSheet = async (sheetType) => {
+                setIsLoading(true);
+                setMessage({ type: 'info', text: 'טוען נתונים...' });
+                
+                const sheetId = SHEETS_CONFIG[sheetType].id;
+                const figures = await loadGoogleSheetData(sheetId);
+                
+                if (figures && figures.length >= 10) {
+                    setAllFigures(figures);
+                    setDataSource(sheetType);
+                    setMessage({ type: 'success', text: `נטענו ${figures.length} דמויות מרשימת ${SHEETS_CONFIG[sheetType].name}` });
+                    setTimeout(() => setMessage(null), 2000);
+                } else {
+                    setMessage({ type: 'error', text: 'שגיאה בטעינת הנתונים. אנא בדוק את הקישור והרשאות השיתוף' });
+                    setTimeout(() => setMessage(null), 3000);
+                }
+                
+                setIsLoading(false);
+            };
+
+            const handleFigureClick = (e, figure) => {
+                e.stopPropagation();
+                if (figure.link) {
+                    window.open(figure.link, '_blank');
+                }
+            };
+
+            const handleDragStart = (e, figure) => {
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', ''); // Required for Firefox
+                setDraggedItem(figure);
+            };
+
+            const handleDragOver = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                if (!draggedItem) {
+                    console.log('DragOver but no draggedItem');
+                    return;
+                }
+                
+                e.dataTransfer.dropEffect = 'move';
+                
+                const sortedPlaced = sortFigures(placed);
+                const shouldSplit = allowSplit && sortedPlaced.length >= 6;
+                
+                const targetTimeline = e.currentTarget;
+                const rect = targetTimeline.getBoundingClientRect();
+                const relativeX = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+                
+                if (!shouldSplit) {
+                    setDragPosition({ x: relativeX, timeline: 1 });
+                } else {
+                    const timelineNum = parseInt(targetTimeline.getAttribute('data-timeline'));
+                    setDragPosition({ x: relativeX, timeline: timelineNum });
+                }
+            };
+
+            const handleDragLeave = (e) => {
+                const relatedTarget = e.relatedTarget;
+                if (!relatedTarget || !e.currentTarget.contains(relatedTarget)) {
+                    // Only clear if actually leaving the timeline
+                    const timelineElements = document.querySelectorAll('[data-timeline]');
+                    let isOverTimeline = false;
+                    
+                    timelineElements.forEach(el => {
+                        if (el.contains(relatedTarget)) {
+                            isOverTimeline = true;
+                        }
+                    });
+                    
+                    if (!isOverTimeline) {
+                        setDragPosition(null);
+                    }
+                }
+            };
+
+            const handleDragEnd = (e) => {
+                setDraggedItem(null);
+                setDragPosition(null);
+            };
+
+            const placeFigureAutomatically = (figure) => {
+                setPlaced([...placed, figure]);
+                setFailedFigures([...failedFigures, figure]);
+                
+                const nextRemaining = remaining.filter(f => f !== figure);
+                setRemaining(nextRemaining);
+                
+                if (nextRemaining.length > 0) {
+                    setCurrentFigure(nextRemaining[0]);
+                } else {
+                    setGameComplete(true);
+                    setCurrentFigure(null);
+                }
+                
+                setAttemptCount(0);
+            };
+
+            const isCorrectPlacement = (figureToPlace, sortedPlaced, relativePosition) => {
+                if (sortedPlaced.length === 0) {
+                    console.log('Empty list - accepting placement');
+                    return true;
+                }
+                
+                const correctIndex = sortedPlaced.findIndex(fig => {
+                    if (fig.year > figureToPlace.year) return true;
+                    if (fig.year === figureToPlace.year && fig.name.localeCompare(figureToPlace.name, 'he') > 0) return true;
+                    return false;
+                });
+                
+                console.log('isCorrectPlacement:', {
+                    figureYear: figureToPlace.year,
+                    figureName: figureToPlace.name,
+                    correctIndex,
+                    relativePosition,
+                    sortedPlacedLength: sortedPlaced.length
+                });
+                
+                if (correctIndex === -1) {
+                    const positions = placed.map((fig) => {
+                        const figIndex = sortedPlaced.indexOf(fig);
+                        if (figIndex === -1) return null;
+                        return { fig, pos: (figIndex + 1) / (sortedPlaced.length + 1) };
+                    }).filter(p => p !== null);
+                    
+                    const maxPos = positions.length > 0 ? Math.max(...positions.map(p => p.pos)) : 0;
+                    const result = relativePosition > maxPos - 0.1; // Larger tolerance
+                    console.log('End placement:', { maxPos, relativePosition, result });
+                    return result;
+                } else if (correctIndex === 0) {
+                    const positions = placed.map((fig) => {
+                        const figIndex = sortedPlaced.indexOf(fig);
+                        if (figIndex === -1) return null;
+                        return { fig, pos: (figIndex + 1) / (sortedPlaced.length + 1) };
+                    }).filter(p => p !== null);
+                    
+                    const minPos = positions.length > 0 ? Math.min(...positions.map(p => p.pos)) : 1;
+                    const result = relativePosition < minPos + 0.15; // Larger tolerance for first position
+                    console.log('Start placement (FIRST):', { minPos, relativePosition, result });
+                    return result;
+                } else {
+                    const beforeFig = sortedPlaced[correctIndex - 1];
+                    const afterFig = sortedPlaced[correctIndex];
+                    const positions = placed.map((fig) => {
+                        const figIndex = sortedPlaced.indexOf(fig);
+                        if (figIndex === -1) return null;
+                        return { fig, pos: (figIndex + 1) / (sortedPlaced.length + 1) };
+                    }).filter(p => p !== null);
+                    
+                    const beforePos = positions.find(p => p.fig === beforeFig)?.pos || 0;
+                    const afterPos = positions.find(p => p.fig === afterFig)?.pos || 1;
+                    const result = relativePosition > beforePos - 0.1 && relativePosition < afterPos + 0.1;
+                    console.log('Middle placement:', { beforePos, afterPos, relativePosition, result });
+                    return result;
+                }
+            };
+
+            const handlePlacement = (clientX, clientY, isManual = false) => {
+                console.log('handlePlacement called:', { 
+                    hasDraggedItem: !!draggedItem, 
+                    hasCurrentFigure: !!currentFigure,
+                    isManual,
+                    clientX,
+                    clientY
+                });
+                
+                if (!draggedItem && !isManual) {
+                    console.error('No item to place!');
+                    return false;
+                }
+                
+                const figureToPlace = isManual ? currentFigure : draggedItem;
+                if (!figureToPlace) {
+                    console.error('figureToPlace is null!');
+                    return false;
+                }
+
+                console.log('Placing figure:', figureToPlace.name);
+
+                const sortedPlaced = sortFigures(placed);
+                const shouldSplit = allowSplit && sortedPlaced.length >= 6;
+                
+                let isCorrect = false;
+                
+                if (isManual) {
+                    isCorrect = true;
+                } else {
+                    if (!shouldSplit) {
+                        const activeRef = timelineRef.current || timeline1Ref.current;
+                        if (!activeRef) return;
+                        const rect = activeRef.getBoundingClientRect();
+                        const dropX = clientX - rect.left;
+                        const relativePosition = dropX / rect.width;
+                        isCorrect = isCorrectPlacement(figureToPlace, sortedPlaced, relativePosition);
+                    } else {
+                        const line1Count = Math.ceil(sortedPlaced.length / 2);
+                        const line1Figures = sortedPlaced.slice(0, line1Count);
+                        const line2Figures = sortedPlaced.slice(line1Count);
+                        
+                        const rect1 = timeline1Ref.current?.getBoundingClientRect();
+                        const rect2 = timeline2Ref.current?.getBoundingClientRect();
+                        
+                        let targetLine = 1;
+                        let rect = rect1;
+                        
+                        if (rect1 && rect2) {
+                            const distToLine1 = Math.abs(clientY - (rect1.top + rect1.height / 2));
+                            const distToLine2 = Math.abs(clientY - (rect2.top + rect2.height / 2));
+                            
+                            if (distToLine2 < distToLine1) {
+                                targetLine = 2;
+                                rect = rect2;
+                            }
+                        }
+                        
+                        if (!rect) return;
+                        
+                        const dropX = clientX - rect.left;
+                        const relativePosition = dropX / rect.width;
+                        
+                        if (targetLine === 1) {
+                            // Check if it should be in line 1
+                            const lastInLine1 = line1Figures[line1Figures.length - 1];
+                            const firstInLine2 = line2Figures[0];
+                            
+                            // Can be at end of line 1 if:
+                            // - No line 2, OR
+                            // - Year is less than first in line 2, OR
+                            // - Year equals first in line 2 and alphabetically before/equal
+                            const canBeInLine1 = !firstInLine2 || 
+                                                  figureToPlace.year < firstInLine2.year ||
+                                                  (figureToPlace.year === firstInLine2.year && 
+                                                   figureToPlace.name.localeCompare(firstInLine2.name, 'he') <= 0);
+                            
+                            console.log('Line 1 check:', {
+                                figureYear: figureToPlace.year,
+                                figureName: figureToPlace.name,
+                                firstInLine2Year: firstInLine2?.year,
+                                firstInLine2Name: firstInLine2?.name,
+                                canBeInLine1
+                            });
+                            
+                            if (canBeInLine1) {
+                                isCorrect = isCorrectPlacement(figureToPlace, line1Figures, relativePosition);
+                            } else {
+                                console.log('Rejected: Cannot be in line 1');
+                            }
+                        } else {
+                            // Check if it should be in line 2
+                            const lastInLine1 = line1Figures[line1Figures.length - 1];
+                            const firstInLine2 = line2Figures[0];
+                            
+                            // Can be at start of line 2 if:
+                            // - No line 1, OR
+                            // - Year is greater than last in line 1, OR
+                            // - Year equals last in line 1 and alphabetically after/equal
+                            const canBeInLine2 = !lastInLine1 || 
+                                                  figureToPlace.year > lastInLine1.year ||
+                                                  (figureToPlace.year === lastInLine1.year && 
+                                                   figureToPlace.name.localeCompare(lastInLine1.name, 'he') >= 0);
+                            
+                            console.log('Line 2 check:', {
+                                figureYear: figureToPlace.year,
+                                figureName: figureToPlace.name,
+                                lastInLine1Year: lastInLine1?.year,
+                                lastInLine1Name: lastInLine1?.name,
+                                canBeInLine2
+                            });
+                            
+                            if (canBeInLine2) {
+                                isCorrect = isCorrectPlacement(figureToPlace, line2Figures, relativePosition);
+                            } else {
+                                console.log('Rejected: Cannot be in line 2');
+                            }
+                        }
+                    }
+                }
+
+                setSteps(s => s + 1);
+
+                console.log('Is correct placement?', isCorrect);
+
+                if (isCorrect) {
+                    setPlaced([...placed, figureToPlace]);
+                    setSuccessCount(sc => sc + 1);
+                    setMessage({ type: 'success', text: `נכון! ${figureToPlace.name} (${figureToPlace.year})` });
+                    
+                    const nextRemaining = remaining.filter(f => f !== figureToPlace);
+                    setRemaining(nextRemaining);
+                    
+                    if (nextRemaining.length > 0) {
+                        setCurrentFigure(nextRemaining[0]);
+                    } else {
+                        setGameComplete(true);
+                        setCurrentFigure(null);
+                    }
+                    
+                    setAttemptCount(0);
+                } else {
+                    const newAttemptCount = attemptCount + 1;
+                    setAttemptCount(newAttemptCount);
+                    
+                    if (limitAttempts && newAttemptCount >= 3) {
+                        setMessage({ type: 'error', text: `3 ניסיונות נכשלו. ממקם אוטומטית...` });
+                        setTimeout(() => placeFigureAutomatically(figureToPlace), 1500);
+                    } else {
+                        setMessage({ type: 'error', text: `מיקום לא נכון! נסה שוב. (ניסיון ${newAttemptCount}${limitAttempts ? '/3' : ''})` });
+                    }
+                }
+
+                setDraggedItem(null);
+                setDragPosition(null);
+                setTimeout(() => setMessage(null), 2000);
+                
+                return isCorrect;
+            };
+
+            const handleDrop = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                console.log('Drop event triggered', { draggedItem, clientX: e.clientX, clientY: e.clientY });
+                
+                if (!draggedItem) {
+                    console.log('No dragged item');
+                    return;
+                }
+                
+                handlePlacement(e.clientX, e.clientY);
+            };
+
+            const handleTouchMove = (e) => {
+                if (!draggedItem) return;
+                e.preventDefault(); // Prevent scrolling while dragging
+                
+                const touch = e.touches[0];
+                const sortedPlaced = sortFigures(placed);
+                const shouldSplit = allowSplit && sortedPlaced.length >= 6;
+                
+                if (!shouldSplit) {
+                    const activeRef = timelineRef.current || timeline1Ref.current;
+                    if (activeRef) {
+                        const rect = activeRef.getBoundingClientRect();
+                        if (touch.clientY >= rect.top - 20 && touch.clientY <= rect.bottom + 20) {
+                            const relativeX = Math.max(0, Math.min(100, ((touch.clientX - rect.left) / rect.width) * 100));
+                            setDragPosition({ x: relativeX, timeline: 1 });
+                        }
+                    }
+                } else {
+                    const rect1 = timeline1Ref.current?.getBoundingClientRect();
+                    const rect2 = timeline2Ref.current?.getBoundingClientRect();
+                    
+                    if (rect1 && rect2) {
+                        if (touch.clientY >= rect1.top - 20 && touch.clientY <= rect1.bottom + 20) {
+                            const relativeX = Math.max(0, Math.min(100, ((touch.clientX - rect1.left) / rect1.width) * 100));
+                            setDragPosition({ x: relativeX, timeline: 1 });
+                        } else if (touch.clientY >= rect2.top - 20 && touch.clientY <= rect2.bottom + 20) {
+                            const relativeX = Math.max(0, Math.min(100, ((touch.clientX - rect2.left) / rect2.width) * 100));
+                            setDragPosition({ x: relativeX, timeline: 2 });
+                        }
+                    }
+                }
+            };
+
+            const handleTouchEnd = (e) => {
+                if (!draggedItem || e.changedTouches.length === 0) return;
+                e.preventDefault();
+                
+                const touch = e.changedTouches[0];
+                
+                console.log('Touch end:', { 
+                    draggedItem: draggedItem?.name,
+                    touchX: touch.clientX, 
+                    touchY: touch.clientY 
+                });
+                
+                handlePlacement(touch.clientX, touch.clientY);
+            };
+
+            const handleTouchStart = (e, figure) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('Touch start:', figure.name);
+                setDraggedItem(figure);
+            };
+
+            const handlePlaceByNumber = () => {
+                const num = parseInt(selectedNumber);
+                
+                if (isNaN(num) || num < 1) {
+                    setMessage({ type: 'error', text: 'אנא הזן מספר תקין' });
+                    setTimeout(() => setMessage(null), 2000);
+                    return;
+                }
+                
+                const sortedPlaced = sortFigures(placed);
+                
+                if (num > sortedPlaced.length) {
+                    setMessage({ type: 'error', text: 'מספר מחוץ לטווח' });
+                    setTimeout(() => setMessage(null), 2000);
+                    return;
+                }
+                
+                const targetFig = sortedPlaced[num - 1];
+                
+                if (placementType === 'before') {
+                    if (currentFigure.year > targetFig.year || 
+                        (currentFigure.year === targetFig.year && currentFigure.name.localeCompare(targetFig.name, 'he') >= 0)) {
+                        setMessage({ type: 'error', text: 'מיקום לא נכון! נסה שוב.' });
+                        const newAttemptCount = attemptCount + 1;
+                        setAttemptCount(newAttemptCount);
+                        
+                        if (limitAttempts && newAttemptCount >= 3) {
+                            setTimeout(() => placeFigureAutomatically(currentFigure), 1500);
+                        }
+                        
+                        setSteps(s => s + 1);
+                        setTimeout(() => setMessage(null), 2000);
+                        setSelectedNumber('');
+                        return;
+                    }
+                    
+                    if (num > 1) {
+                        const beforeFig = sortedPlaced[num - 2];
+                        if (currentFigure.year < beforeFig.year ||
+                            (currentFigure.year === beforeFig.year && currentFigure.name.localeCompare(beforeFig.name, 'he') < 0)) {
+                            setMessage({ type: 'error', text: 'מיקום לא נכון! נסה שוב.' });
+                            const newAttemptCount = attemptCount + 1;
+                            setAttemptCount(newAttemptCount);
+                            
+                            if (limitAttempts && newAttemptCount >= 3) {
+                                setTimeout(() => placeFigureAutomatically(currentFigure), 1500);
+                            }
+                            
+                            setSteps(s => s + 1);
+                            setTimeout(() => setMessage(null), 2000);
+                            setSelectedNumber('');
+                            return;
+                        }
+                    }
+                } else {
+                    if (currentFigure.year < targetFig.year ||
+                        (currentFigure.year === targetFig.year && currentFigure.name.localeCompare(targetFig.name, 'he') <= 0)) {
+                        setMessage({ type: 'error', text: 'מיקום לא נכון! נסה שוב.' });
+                        const newAttemptCount = attemptCount + 1;
+                        setAttemptCount(newAttemptCount);
+                        
+                        if (limitAttempts && newAttemptCount >= 3) {
+                            setTimeout(() => placeFigureAutomatically(currentFigure), 1500);
+                        }
+                        
+                        setSteps(s => s + 1);
+                        setTimeout(() => setMessage(null), 2000);
+                        setSelectedNumber('');
+                        return;
+                    }
+                    
+                    if (num < sortedPlaced.length) {
+                        const afterFig = sortedPlaced[num];
+                        if (currentFigure.year > afterFig.year ||
+                            (currentFigure.year === afterFig.year && currentFigure.name.localeCompare(afterFig.name, 'he') > 0)) {
+                            setMessage({ type: 'error', text: 'מיקום לא נכון! נסה שוב.' });
+                            const newAttemptCount = attemptCount + 1;
+                            setAttemptCount(newAttemptCount);
+                            
+                            if (limitAttempts && newAttemptCount >= 3) {
+                                setTimeout(() => placeFigureAutomatically(currentFigure), 1500);
+                            }
+                            
+                            setSteps(s => s + 1);
+                            setTimeout(() => setMessage(null), 2000);
+                            setSelectedNumber('');
+                            return;
+                        }
+                    }
+                }
+                
+                setSelectedNumber('');
+                handlePlacement(0, 0, true);
+            };
+
+            const handlePlaceFirst = () => {
+                const sortedPlaced = sortFigures(placed);
+                if (sortedPlaced.length > 0 && 
+                    (currentFigure.year > sortedPlaced[0].year ||
+                     (currentFigure.year === sortedPlaced[0].year && currentFigure.name.localeCompare(sortedPlaced[0].name, 'he') > 0))) {
+                    setMessage({ type: 'error', text: 'מיקום לא נכון! נסה שוב.' });
+                    const newAttemptCount = attemptCount + 1;
+                    setAttemptCount(newAttemptCount);
+                    
+                    if (limitAttempts && newAttemptCount >= 3) {
+                        setTimeout(() => placeFigureAutomatically(currentFigure), 1500);
+                    }
+                    
+                    setSteps(s => s + 1);
+                    setTimeout(() => setMessage(null), 2000);
+                    return;
+                }
+                handlePlacement(0, 0, true);
+            };
+
+            const handlePlaceLast = () => {
+                const sortedPlaced = sortFigures(placed);
+                if (sortedPlaced.length > 0 && 
+                    (currentFigure.year < sortedPlaced[sortedPlaced.length - 1].year ||
+                     (currentFigure.year === sortedPlaced[sortedPlaced.length - 1].year && 
+                      currentFigure.name.localeCompare(sortedPlaced[sortedPlaced.length - 1].name, 'he') < 0))) {
+                    setMessage({ type: 'error', text: 'מיקום לא נכון! נסה שוב.' });
+                    const newAttemptCount = attemptCount + 1;
+                    setAttemptCount(newAttemptCount);
+                    
+                    if (limitAttempts && newAttemptCount >= 3) {
+                        setTimeout(() => placeFigureAutomatically(currentFigure), 1500);
+                    }
+                    
+                    setSteps(s => s + 1);
+                    setTimeout(() => setMessage(null), 2000);
+                    return;
+                }
+                handlePlacement(0, 0, true);
+            };
+
+            const sortedPlaced = sortFigures(placed);
+            const minYear = sortedPlaced.length > 1 ? sortedPlaced[0].year : 0;
+            const maxYear = sortedPlaced.length > 1 ? sortedPlaced[sortedPlaced.length - 1].year : 2025;
+            
+            const shouldSplit = allowSplit && sortedPlaced.length >= 6;
+            const line1Count = Math.ceil(sortedPlaced.length / 2);
+            const line1Figures = sortedPlaced.slice(0, line1Count);
+            const line2Figures = sortedPlaced.slice(line1Count);
+            
+            const line1Min = line1Figures.length > 0 ? line1Figures[0].year : minYear;
+            const line1Max = line1Figures.length > 0 ? line1Figures[line1Figures.length - 1].year : maxYear;
+            const line2Min = line2Figures.length > 0 ? line2Figures[0].year : minYear;
+            const line2Max = line2Figures.length > 0 ? line2Figures[line2Figures.length - 1].year : maxYear;
+
+            const renderTimeline = (figures, timelineNum, minY, maxY) => {
+                const baseFontSize = 14;
+                const minFontSize = 6;
+                const minGap = 10;
+                const ref = timelineNum === 1 ? (shouldSplit ? timeline1Ref : timelineRef) : timeline2Ref;
+                
+                let fontSize = baseFontSize;
+                
+                if (ref && ref.current && figures.length > 0) {
+                    const timelineWidth = ref.current.getBoundingClientRect().width - 40;
+                    
+                    // Find longest name - account for line breaks
+                    const longestNameLength = Math.max(...figures.map(fig => {
+                        const words = fig.name.split(' ');
+                        return Math.max(...words.map(w => w.length));
+                    }));
+                    
+                    // More aggressive width calculation
+                    const charWidth = 0.8; // characters per pixel at base font
+                    const estimatedBoxWidth = (longestNameLength * baseFontSize * charWidth) + 12; // padding
+                    const totalSpaceNeeded = (estimatedBoxWidth + minGap) * figures.length;
+                    
+                    if (totalSpaceNeeded > timelineWidth) {
+                        const availableSpacePerBox = (timelineWidth / figures.length) - minGap;
+                        const scale = availableSpacePerBox / estimatedBoxWidth;
+                        fontSize = Math.max(minFontSize, Math.floor(baseFontSize * scale * 0.8));
+                    }
+                }
+                
+                const showIndicator = dragPosition && dragPosition.timeline === timelineNum;
+                
+                return (
+                    <div
+                        ref={ref}
+                        data-timeline={timelineNum}
+                        onDragOver={handleDragOver}
+                        onDragLeave={handleDragLeave}
+                        onDrop={handleDrop}
+                        onTouchMove={handleTouchMove}
+                        onTouchEnd={handleTouchEnd}
+                        className="relative h-32 md:h-40 bg-gradient-to-r from-indigo-100 to-purple-100 rounded-lg border-4 border-indigo-300 border-dashed"
+                        style={{ minHeight: '128px' }}
+                    >
+                        <div className="absolute top-1/2 left-4 right-4 h-1 bg-indigo-400 transform -translate-y-1/2"></div>
+                        
+                        {showIndicator && (
+                            <div
+                                className="absolute top-0 bottom-0 w-1 bg-red-500 z-10 transition-all duration-75"
+                                style={{ left: `${dragPosition.x}%` }}
+                            >
+                                <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-4 h-4 bg-red-500 rounded-full"></div>
+                            </div>
+                        )}
+                        
+                        {sortedPlaced.length <= 1 && (
+                            <>
+                                <div className="absolute right-2 bottom-1 text-xs text-gray-600 font-semibold">
+                                    2025
+                                </div>
+                                <div className="absolute left-2 bottom-1 text-xs text-gray-600 font-semibold">
+                                    0
+                                </div>
+                            </>
+                        )}
+                        
+                        {figures.map((figure, idx) => {
+                            const position = (idx + 1) / (figures.length + 1);
+                            const figNumber = sortedPlaced.indexOf(figure) + 1;
+                            const isFailed = failedFigures.includes(figure);
+                            
+                            return (
+                                <div
+                                    key={figure.name + figure.year}
+                                    className="absolute top-1/2 transform -translate-x-1/2 -translate-y-1/2"
+                                    style={{ left: `${position * 100}%` }}
+                                >
+                                    <div 
+                                        className={`${isFailed ? 'bg-red-600' : 'bg-indigo-600'} text-white px-0.5 py-0.5 rounded shadow-lg font-medium text-center cursor-pointer hover:opacity-90 transition-opacity`}
+                                        style={{ 
+                                            fontSize: `${fontSize + fontSizeAdjustment}px`,
+                                            lineHeight: '1.2',
+                                            maxWidth: `${Math.max(60, (fontSize + fontSizeAdjustment) * 6)}px`,
+                                            wordWrap: 'break-word',
+                                            overflowWrap: 'break-word',
+                                            hyphens: 'auto'
+                                        }}
+                                        onClick={(e) => handleFigureClick(e, figure)}
+                                        title="לחץ לפתיחת הקישור"
+                                    >
+                                        <div className="font-bold leading-tight">{figNumber}</div>
+                                        <div className="leading-tight">{figure.name}</div>
+                                        <div className="opacity-90 leading-tight" style={{ fontSize: `${Math.max(fontSize + fontSizeAdjustment - 2, 6)}px` }}>{figure.year}</div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                );
+            };
+
+            if (isLoading) {
+                return (
+                    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+                        <div className="text-center">
+                            <div className="text-2xl font-bold text-indigo-900 mb-4">טוען נתונים...</div>
+                            <div className="text-gray-600">אנא המתן</div>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-2 md:p-4">
+                    <div className="max-w-7xl mx-auto">
+                        <h1 className="text-2xl md:text-4xl font-bold text-center mb-2 text-indigo-900">
+                            אתגר ציר הזמן ההיסטורי
+                        </h1>
+                        <p className="text-center text-sm md:text-base text-gray-600 mb-3 md:mb-4">
+                            גרור דמויות היסטוריות למיקום הכרונולוגי הנכון שלהן לפי שנת הלידה
+                        </p>
+
+                        <div className="bg-white rounded-lg shadow-lg p-2 md:p-3 mb-2">
+                            <div className="flex flex-col gap-2 mb-2">
+                                <div className="flex gap-2 justify-center flex-wrap">
+                                    <button
+                                        onClick={() => handleLoadSheet('combined')}
+                                        disabled={isLoading}
+                                        className={`px-4 py-2 rounded font-medium transition-colors ${
+                                            dataSource === 'combined' 
+                                                ? 'bg-purple-600 text-white' 
+                                                : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+                                        } disabled:opacity-50`}
+                                    >
+                                        משולב
+                                    </button>
+                                    <button
+                                        onClick={() => handleLoadSheet('general')}
+                                        disabled={isLoading}
+                                        className={`px-4 py-2 rounded font-medium transition-colors ${
+                                            dataSource === 'general' 
+                                                ? 'bg-blue-600 text-white' 
+                                                : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                                        } disabled:opacity-50`}
+                                    >
+                                        כללי
+                                    </button>
+                                    <button
+                                        onClick={() => handleLoadSheet('jewish')}
+                                        disabled={isLoading}
+                                        className={`px-4 py-2 rounded font-medium transition-colors ${
+                                            dataSource === 'jewish' 
+                                                ? 'bg-green-600 text-white' 
+                                                : 'bg-green-100 text-green-700 hover:bg-green-200'
+                                        } disabled:opacity-50`}
+                                    >
+                                        יהודי דתי
+                                    </button>
+                                </div>
+                                <div className="text-center text-xs text-gray-500">
+                                    מקור נתונים נוכחי: {SHEETS_CONFIG[dataSource].name} ({allFigures.length} דמויות)
+                                </div>
+                            </div>
+                            
+                            <div className="flex flex-col md:flex-row gap-4 items-center justify-center">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={limitAttempts}
+                                        onChange={(e) => setLimitAttempts(e.target.checked)}
+                                        className="w-4 h-4"
+                                    />
+                                    <span className="text-gray-700 font-medium text-sm">הגבלת ניסיונות (3 ניסיונות)</span>
+                                </label>
+                                
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={allowSplit}
+                                        onChange={(e) => setAllowSplit(e.target.checked)}
+                                        className="w-4 h-4"
+                                    />
+                                    <span className="text-gray-700 font-medium text-sm">אפשר פיצול ציר הזמן לשניים</span>
+                                </label>
+                                
+                                <div className="flex items-center gap-2">
+                                    <span className="text-gray-700 font-medium text-sm">מספר דמויות:</span>
+                                    <select
+                                        value={figureCount}
+                                        onChange={(e) => setFigureCount(Number(e.target.value))}
+                                        className="px-2 py-1 text-sm border border-gray-300 rounded"
+                                        disabled={!gameComplete && placed.length > 1}
+                                    >
+                                        <option value={10}>10</option>
+                                        <option value={20}>20</option>
+                                        <option value={30}>30</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="bg-white rounded-lg shadow-lg p-2 md:p-4 mb-2 md:mb-3">
+                            <div className="flex items-center justify-between mb-2 md:mb-3">
+                                <div className="flex items-center gap-2">
+                                    <span className="text-sm text-gray-600 font-medium">פונט:</span>
+                                    <button
+                                        onClick={(e) => {
+                                            e.preventDefault();
+                                            console.log('Minus clicked! Current:', fontSizeAdjustment);
+                                            setFontSizeAdjustment(prev => {
+                                                const newVal = Math.max(-5, prev - 1);
+                                                console.log('Setting to:', newVal);
+                                                return newVal;
+                                            });
+                                        }}
+                                        className="w-8 h-8 bg-gray-200 hover:bg-gray-300 rounded flex items-center justify-center font-bold text-gray-700 transition-colors cursor-pointer"
+                                        title="הקטן פונט"
+                                        type="button"
+                                    >
+                                        −
+                                    </button>
+                                    <span className="text-sm font-mono w-8 text-center text-gray-700">
+                                        {fontSizeAdjustment > 0 ? `+${fontSizeAdjustment}` : fontSizeAdjustment}
+                                    </span>
+                                    <button
+                                        onClick={(e) => {
+                                            e.preventDefault();
+                                            console.log('Plus clicked! Current:', fontSizeAdjustment);
+                                            setFontSizeAdjustment(prev => {
+                                                const newVal = Math.min(5, prev + 1);
+                                                console.log('Setting to:', newVal);
+                                                return newVal;
+                                            });
+                                        }}
+                                        className="w-8 h-8 bg-gray-200 hover:bg-gray-300 rounded flex items-center justify-center font-bold text-gray-700 transition-colors cursor-pointer"
+                                        title="הגדל פונט"
+                                        type="button"
+                                    >
+                                        +
+                                    </button>
+                                </div>
+                                <h2 className="text-base md:text-lg font-semibold text-gray-700">
+                                    ציר זמן
+                                </h2>
+                            </div>
+                            
+                            {!shouldSplit ? (
+                                <div key={`timeline-single-${fontSizeAdjustment}-${forceUpdate}`}>
+                                    {renderTimeline(sortedPlaced, 1, minYear, maxYear, fontSizeAdjustment)}
+                                </div>
+                            ) : (
+                                <div className="space-y-4" key={`timeline-split-${fontSizeAdjustment}-${forceUpdate}`}>
+                                    {renderTimeline(line1Figures, 1, line1Min, line1Max, fontSizeAdjustment)}
+                                    {renderTimeline(line2Figures, 2, line2Min, line2Max, fontSizeAdjustment)}
+                                </div>
+                            )}
+                            
+                            <div className="mt-2 text-center text-xs md:text-sm text-gray-600">
+                                דמויות שהוצבו בהצלחה: {successCount} / {gameFigures.length} | צעדים: {steps}
+                            </div>
+                        </div>
+
+                        {!gameComplete && currentFigure && (
+                            <>
+                                <div className="bg-white rounded-lg shadow-lg p-2 md:p-3 mb-2">
+                                    <h3 className="text-sm md:text-base font-semibold mb-2 text-gray-700 text-center">
+                                        בחר מיקום:
+                                    </h3>
+                                    
+                                    <div className="space-y-2">
+                                        <div className="flex items-center gap-2 justify-center flex-wrap">
+                                            <select
+                                                value={placementType}
+                                                onChange={(e) => setPlacementType(e.target.value)}
+                                                className="px-2 py-1 text-sm border border-gray-300 rounded"
+                                            >
+                                                <option value="after">אחרי</option>
+                                                <option value="before">לפני</option>
+                                            </select>
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                value={selectedNumber}
+                                                onChange={(e) => setSelectedNumber(e.target.value)}
+                                                className="w-16 px-2 py-1 text-sm border border-gray-300 rounded text-center"
+                                                placeholder="__"
+                                            />
+                                            <button
+                                                onClick={handlePlaceByNumber}
+                                                disabled={!selectedNumber}
+                                                className="bg-purple-600 text-white px-3 py-1 text-sm rounded hover:bg-purple-700 transition-colors font-medium disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                            >
+                                                מקם
+                                            </button>
+                                        </div>
+                                        
+                                        <div className="flex gap-2 justify-center flex-wrap">
+                                            <button
+                                                onClick={handlePlaceFirst}
+                                                className="bg-green-600 text-white px-3 py-1 text-sm rounded hover:bg-green-700 transition-colors font-medium"
+                                            >
+                                                שנת לידה המוקדמת ביותר
+                                            </button>
+                                            <button
+                                                onClick={handlePlaceLast}
+                                                className="bg-blue-600 text-white px-3 py-1 text-sm rounded hover:bg-blue-700 transition-colors font-medium"
+                                            >
+                                                שנת לידה המאוחרת ביותר
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-white rounded-lg shadow-lg p-2 md:p-4 text-center">
+                                    <h3 className="text-sm md:text-base font-semibold mb-2 text-gray-700">
+                                        גרור דמות זו לציר הזמן:
+                                    </h3>
+                                    <div
+                                        draggable
+                                        onDragStart={(e) => handleDragStart(e, currentFigure)}
+                                        onDragEnd={handleDragEnd}
+                                        onTouchStart={(e) => handleTouchStart(e, currentFigure)}
+                                        className="inline-block bg-gradient-to-r from-purple-500 to-indigo-600 text-white px-4 py-2 md:px-6 md:py-3 rounded-lg shadow-lg cursor-move hover:shadow-xl active:shadow-2xl transition-shadow text-base md:text-lg font-bold select-none"
+                                    >
+                                        {currentFigure.name}
+                                    </div>
+                                    <p className="mt-2 text-xs md:text-sm text-gray-500">
+                                        לחץ וגרור כדי למקם על ציר הזמן או השתמש בכפתורים למעלה
+                                    </p>
+                                </div>
+                            </>
+                        )}
+
+                        {gameComplete && (
+                            <div className="bg-white rounded-lg shadow-lg p-4 md:p-6 text-center">
+                                <Trophy className="w-12 h-12 md:w-16 md:h-16 text-yellow-500 mx-auto mb-4" />
+                                <h3 className="text-xl md:text-2xl font-bold text-gray-800 mb-2">
+                                    כל הכבוד!
+                                </h3>
+                                <p className="text-base md:text-lg text-gray-600 mb-4">
+                                    השלמת את ציר הזמן!<br/>
+                                    דמויות מוצלחות: <span className="font-bold text-green-600">{successCount}/{gameFigures.length}</span><br/>
+                                    סך צעדים: <span className="font-bold text-indigo-600">{steps}</span>
+                                </p>
+                                <button
+                                    onClick={() => window.location.reload()}
+                                    className="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 active:bg-indigo-800 transition-colors font-semibold"
+                                >
+                                    שחק שוב
+                                </button>
+                            </div>
+                        )}
+
+                        {message && (
+                            <div
+                                className={`fixed bottom-4 right-4 left-4 md:left-auto md:right-8 md:bottom-8 px-4 py-3 md:px-6 md:py-4 rounded-lg shadow-lg flex items-center gap-3 ${
+                                    message.type === 'success'
+                                        ? 'bg-green-500 text-white'
+                                        : message.type === 'info'
+                                        ? 'bg-blue-500 text-white'
+                                        : 'bg-red-500 text-white'
+                                }`}
+                            >
+                                {message.type === 'success' ? (
+                                    <CheckCircle className="w-5 h-5 md:w-6 md:h-6 flex-shrink-0" />
+                                ) : (
+                                    <AlertCircle className="w-5 h-5 md:w-6 md:h-6 flex-shrink-0" />
+                                )}
+                                <span className="font-semibold text-sm md:text-base">{message.text}</span>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<TimelineGame />);
+    </script>
+</body>
+</html>
